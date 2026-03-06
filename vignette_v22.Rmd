@@ -1,0 +1,470 @@
+---
+title: "v22 Workflow Vignette: Spatial eDNA + qPCR Joint Model"
+author: "Kelly Lab"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    theme: flatly
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  cache   = TRUE,
+  fig.width  = 9,
+  fig.height = 6
+)
+```
+
+## Overview
+
+This vignette demonstrates the v22 spatial joint model for eDNA metabarcoding
+and qPCR data.  The model estimates spatially varying log-concentrations for
+multiple species simultaneously, using:
+
+- **eDNA reads**: Poisson zero-inflation → Beta-Binomial proportional model
+- **qPCR**:       Per-replicate hurdle model (Bernoulli detection + Normal log-concentration)
+- **Spatial field**: Isotropic 2D Hilbert-space Gaussian Process (HSGP) with a
+  single length scale `rho[sp]` per species
+
+**Key v22 feature**: single isotropic `rho[sp]` replaces the anisotropic
+`rho_x[sp] + rho_y[sp]` pair from v21.  For ecologically isotropic fields this
+eliminates a bimodal posterior (two equivalent length-scale solutions) and
+simplifies prior specification.
+
+**Spatial model**:
+$$\log\lambda_{l,s} = \psi + \delta_s + f_s(\mathbf{x}_l) + \epsilon_{l,s}$$
+
+where $\psi$ = population mean, $\delta_s$ = species offset, $f_s$ = isotropic
+GP (HSGP approximation), and $\epsilon_{l,s}$ = iid nugget noise.
+
+---
+
+## 1. Setup
+
+```{r load-workflow}
+# Source the self-contained workflow file — no other dependencies needed.
+# Adjust the path if running from a different working directory.
+source("run_qpcr_metabar_workflow_v22.R")
+options(mc.cores = parallel::detectCores())
+rstan_options(auto_write = TRUE)
+rstan_options(threads_per_chain = 4)
+
+```
+
+The workflow file loads `tidyverse`, `rstan`, `sf`, `akima`, and `patchwork`
+and defines all functions in a single file.
+
+---
+
+## 2. Simulate Example Data
+
+We generate a synthetic survey with:
+
+- 50 sampling locations in a ~400 × 600 km domain (Pacific Northwest coast)
+- 4 species with isotropic spatial structure
+- `rho_km = 80` km length scale (same for all species in this example)
+- `gp_alpha` drawn randomly per species (~0.5–2.0)
+- `log_lambda_mean = log(4)` → moderate eDNA density (~35% zeros)
+
+```{r simulate}
+sim <- simulate_qpcr_metabar_data_v22(
+  n_locations                   = 50,
+  n_species                     = 4,
+  reference_species             = 1,
+  n_qpcr_per_location           = 3,
+  rho_km                        = 80,          # isotropic GP length scale (km)
+  gp_alpha_true                 = c(1.2, 0.8, 1.5, 1.0),
+  sigma_nugget_true             = 0.25,        # per-location noise (all species)
+  log_lambda_mean               = log(4),      # mean log-copies/aliquot
+  sigma_qpcr_true               = 0.3,         # qPCR measurement SD (log scale)
+  qpcr_detection_intercept_true = -2.0,
+  qpcr_detection_slope_true     = 1.5,
+  beta0_true                    = 5.0,         # Beta-Binomial dispersion intercept
+  beta1_true                    = -2.0,        # amplification effect on dispersion
+  gamma0_true                   = 2.0,         # low-copy inflation magnitude
+  gamma1_true                   = exp(1.0),    # low-copy inflation rate
+  total_reads_per_rep           = 10000,
+  seed                          = 17
+)
+
+cat("Species names:", paste(sim$species_names, collapse = ", "), "\n")
+cat("Reference species:", sim$species_names[sim$reference_species], "\n")
+```
+
+### What the simulator returns
+
+```{r sim-structure}
+names(sim)
+names(sim$true_values)
+```
+
+- `edna_data` — long-format data frame: one row per (PCR replicate, species)
+- `qpcr_data` — one row per qPCR replicate of the reference species
+- `locations`  — lat/lon for each sampling location
+- `true_values` — ground truth for model validation (concentrations, GP fields, etc.)
+
+### Quick look at the data
+
+```{r sim-preview}
+# eDNA data: reads per species per PCR replicate
+head(sim$edna_data, 12)
+
+# qPCR data: binary detection + log-concentration when detected
+head(sim$qpcr_data[sim$qpcr_data$detected == 1, ], 6)
+
+# Zero proportion in eDNA (Poisson-driven)
+zero_rate <- mean(sim$edna_data$Nreads == 0)
+cat(sprintf("eDNA zero rate: %.1f%%\n", 100 * zero_rate))
+```
+
+---
+
+## 3. Format Data
+
+`format_qpcr_metabar_data_v22` clusters nearby coordinates, converts to UTM
+(centered), and constructs the Stan-ready arrays.  Any location where **all**
+qPCR replicates are non-detected is automatically excluded (the hurdle qPCR
+likelihood requires at least one detected replicate per location).
+
+```{r format}
+fmt <- format_qpcr_metabar_data_v22(
+  edna_data         = sim$edna_data,
+  qpcr_data         = sim$qpcr_data,
+  alpha_known       = sim$alpha_known,
+  reference_species = sim$reference_species,
+  species_names     = sim$species_names,
+  pcr_id_col        = "pcr_replicate_id"
+)
+```
+
+Key fields in the returned list:
+
+| Field | Description |
+|---|---|
+| `N_locations` | Number of included locations |
+| `N_edna_obs` | Number of eDNA PCR replicates |
+| `N_qpcr_reps` | Number of qPCR replicates |
+| `edna_obs_data` | `[N_edna_obs × N_species]` read count matrix |
+| `x_utm`, `y_utm` | Centered UTM coordinates (km) |
+| `has_edna`, `has_qpcr` | Per-location availability flags |
+
+```{r format-summary}
+cat("Locations retained:", fmt$N_locations, "\n")
+cat("UTM domain (km):", round(diff(range(fmt$location_list$x_utm)), 1), "x",
+    round(diff(range(fmt$location_list$y_utm)), 1), "\n")
+```
+
+---
+
+## 4. Build Stan Data
+
+`make_stan_data_v22` sets HSGP domain parameters and prior hyperparameters.
+
+**HSGP domain sizing** (`m_x`, `m_y`, `max_rho`):
+
+- `m_x × m_y` basis functions approximate the 2D GP; higher = more accurate but slower
+- `max_rho` sets the boundary half-width: `L = max_rho × π / 4`
+  - Set `max_rho` ≥ largest plausible true rho
+  - With `max_rho = 300`, the domain can represent length scales up to ~300 km
+
+**Key prior choices**:
+
+| Parameter | Prior | Notes |
+|---|---|---|
+| `rho` | Truncated-Normal(mean, sd) > 0 | Use broad SD to allow data to inform |
+| `gp_alpha` | Log-Normal(mean, sd) | Mean ≈ 1 (log scale); adjust to expected amplitude |
+| `sigma_nugget` | Log-Normal hier. | `prior_sd ≈ 1e-5` pins nugget ≈ exp(prior_mean) |
+| `beta0/beta1/gamma0/gamma1` | Dispersion model priors | See Stan file for details |
+
+```{r stan-data}
+sdat <- make_stan_data_v22(
+  formatted_data          = fmt,
+  N_pcr                   = 35,       # total PCR cycles in the qPCR assay
+  m_x                     = 3,       # HSGP basis functions, E-W
+  m_y                     = 4,        # HSGP basis functions, N-S
+  max_rho                 = 300,      # km; must exceed largest expected rho
+  rho_prior_mean          = 100,      # truncated-normal center (km)
+  rho_prior_sd            = 200,      # broad SD lets data identify rho
+  gp_alpha_prior_mean     = 1.0,      # log-normal mean on log scale
+  gp_alpha_prior_sd       = 0.5,
+  sigma_nugget_prior_mean = log(0.25), # pins hierarchical nugget near 0.25
+  sigma_nugget_prior_sd   = 1e-5,     # near-zero SD = fixed nugget (diagnostic mode)
+  sigma_qpcr_prior_sd     = 1.0,
+  beta0_prior_sd          = 1.0,
+  gamma0_prior_mean       = 2.0,
+  gamma0_prior_sd         = 1.0,
+  log_gamma1_prior_mean   = 1.0,
+  log_gamma1_prior_sd     = 0.75
+)
+
+cat("Stan data dimensions: N_locations =", sdat$N_locations,
+    "| N_species =", sdat$N_species,
+    "| M (basis) =", sdat$m_x * sdat$m_y, "\n")
+```
+
+---
+
+## 5. Fit the Model
+
+```{r fit, results='hide'}
+res <- fit_and_plot_v22(
+  formatted_data  = fmt,
+  stan_file       = "quant_metabar_qpcr_v22.stan",
+  stan_data       = sdat,
+  chains          = 3,
+  iter            = 1000,
+  warmup          = 500,
+  seed            = 42,
+  adapt_delta     = 0.99,
+  max_treedepth   = 14,
+  true_values     = sim$true_values,   # pass TRUE values for validation plots
+  save_outputs    = TRUE,
+  output_dir      = "outputs_v22"
+)
+```
+
+> **Runtime**: 3 chains × 2000 iterations at 50 locations typically takes
+> 20–45 minutes.  For quick testing use `chains = 1, iter = 600, warmup = 300`.
+
+### Or use the one-call shortcut
+
+```{r run-workflow, eval=FALSE}
+# Equivalent to steps 2–5 in a single call:
+res <- run_workflow_v22(
+  n_locations  = 50,
+  n_species    = 4,
+  rho_km       = 80,
+  chains       = 3,
+  iter         = 2000,
+  warmup       = 1000,
+  rho_prior_mean = 100,
+  rho_prior_sd   = 200,
+  sigma_nugget_true        = 0.25,
+  sigma_nugget_prior_mean  = log(0.25),
+  sigma_nugget_prior_sd    = 1e-5,
+  log_lambda_mean = log(4),
+  seed = 7
+)
+```
+
+---
+
+## 6. Diagnostics
+
+Check convergence before interpreting results.
+
+```{r diagnostics}
+diag <- res$diagnostics
+cat(sprintf("Divergent transitions : %d\n",   diag$n_divergent))
+cat(sprintf("Max treedepth hits    : %d\n",   diag$max_treedepth_hits))
+cat(sprintf("Max Rhat              : %.4f\n", diag$max_rhat))
+cat(sprintf("Parameters Rhat > 1.01: %d\n",  diag$n_high_rhat))
+
+# Parameters with the worst mixing
+print(diag$top_rhat)
+```
+
+**Interpreting diagnostics**:
+
+- **Divergences > 0**: indicates difficult geometry; try higher `adapt_delta` (e.g. 0.995) or reparameterization
+- **Max treedepth hits > 0**: increase `max_treedepth` (e.g. 15) or use fewer basis functions
+- **Rhat > 1.01**: poor mixing; increase iterations or investigate prior-likelihood conflicts
+
+---
+
+## 7. Parameter Estimates
+
+### Spatial length scale (rho)
+
+```{r rho-summary}
+res$rho_summary$species_summary
+```
+
+The `eff_range` column = `2.15 × rho`: the distance at which spatial correlation
+drops to ~0.05 under the squared-exponential kernel.
+
+```{r rho-plot, fig.height=3}
+res$rho_posterior_plot
+```
+
+Red vertical lines = true values.  Posteriors should cover the true `rho_km = 80`.
+
+### GP amplitude (gp_alpha)
+
+```{r gp-alpha}
+res$gp_alpha_summary$species_summary
+```
+
+```{r gp-alpha-plot, fig.height=4}
+res$gp_alpha_posterior_plot
+```
+
+### Nugget variance
+
+```{r nugget}
+res$nugget_summary$species_summary
+```
+
+```{r var-decomp, fig.height=4}
+res$var_decomp_plot
+```
+
+The stacked bar shows the fraction of log-concentration variance attributable to
+the GP spatial field vs. the iid nugget per species.  A high nugget fraction
+suggests locally variable concentrations that the smooth GP cannot capture.
+
+### qPCR parameters
+
+```{r qpcr-params}
+# sigma_qpcr
+cat(sprintf("sigma_qpcr : %.3f (95%% CI: %.3f-%.3f)\n",
+            res$qpcr_params$sigma_qpcr$mean,
+            res$qpcr_params$sigma_qpcr$q025,
+            res$qpcr_params$sigma_qpcr$q975))
+
+# Detection curve
+cat(sprintf("intercept  : %.3f (%.3f-%.3f)\n",
+            res$qpcr_params$qpcr_detection_intercept$mean,
+            res$qpcr_params$qpcr_detection_intercept$q025,
+            res$qpcr_params$qpcr_detection_intercept$q975))
+cat(sprintf("slope      : %.3f (%.3f-%.3f)\n",
+            res$qpcr_params$qpcr_detection_slope$mean,
+            res$qpcr_params$qpcr_detection_slope$q025,
+            res$qpcr_params$qpcr_detection_slope$q975))
+```
+
+---
+
+## 8. Model Fit Plots
+
+### qPCR fit
+
+Observed vs. posterior-predicted log-concentration for detected replicates.
+X marks = non-detected replicates (plotted at the posterior mean for reference).
+
+```{r qpcr-fit}
+res$qpcr_plot
+```
+
+### Detection probability curve
+
+Detection probability as a function of posterior log-concentration at each
+location.  Dots = observed detection rate; size = number of replicates.
+
+```{r detection-curve}
+res$detection_plot
+```
+
+### eDNA proportion fit
+
+Observed vs. posterior-predicted mean proportion of reads for each species.
+Points should cluster near the 1:1 line.
+
+```{r edna-fit, fig.height=8}
+res$combined_edna
+```
+
+---
+
+## 9. Spatial Concentration Maps
+
+Interpolated posterior-mean concentration surface per species.  Points = sampling
+locations, colored by their true concentration (in simulations) or posterior mean
+(real data).
+
+```{r heatmaps, fig.height=10, fig.width=12}
+res$combined_heatmaps
+```
+
+---
+
+## 10. Simulation Validation (True vs. Predicted)
+
+Available only when `true_values` is passed to `fit_and_plot_v22`.  Each panel
+shows posterior-mean concentration vs. true concentration on log-log axes.
+Coverage = fraction of 95% CIs that contain the true value.
+
+```{r true-vs-pred, fig.height=10, fig.width=12}
+if (!is.null(res$combined_true_vs_pred)) {
+  res$combined_true_vs_pred
+} else {
+  cat("(No true_values provided; skipping validation plot)\n")
+}
+```
+
+---
+
+## 11. Using Real Data
+
+To fit the model to real survey data, replace the simulation steps with your own
+data frames and skip `true_values`:
+
+```{r real-data-example, eval=FALSE}
+# Load your own data
+edna_df <- read.csv("my_edna_reads.csv")   # columns: pcr_replicate_id, lon, lat, species, Nreads
+qpcr_df <- read.csv("my_qpcr_data.csv")   # columns: lon, lat, detected, qpcr_log_conc
+
+# PCR amplification efficiencies on log scale (reference species = 0)
+# Obtain from standard curves or set to 0 for equal efficiency
+alpha_known <- c(0, 0, 0, 0)
+
+# Format
+fmt <- format_qpcr_metabar_data_v22(
+  edna_data         = edna_df,
+  qpcr_data         = qpcr_df,
+  alpha_known       = alpha_known,
+  reference_species = 1,
+  species_names     = c("rockfish_sp1", "rockfish_sp2", "flatfish_sp1", "flatfish_sp2")
+)
+
+# Build Stan data — tune rho_prior based on your domain extent
+sdat <- make_stan_data_v22(
+  fmt,
+  rho_prior_mean = 50,    # start at ~half the domain extent
+  rho_prior_sd   = 100    # broad; let the data inform
+)
+
+# Fit (no true_values for real data)
+res <- fit_and_plot_v22(
+  fmt,
+  stan_file    = "quant_metabar_qpcr_v22.stan",
+  stan_data    = sdat,
+  chains       = 4,
+  iter         = 3000,
+  warmup       = 1500,
+  adapt_delta  = 0.99,
+  save_outputs = TRUE,
+  output_dir   = "outputs_real_data"
+)
+```
+
+---
+
+## 12. Tuning Tips
+
+| Issue | Likely cause | Fix |
+|---|---|---|
+| Divergences | Difficult posterior geometry | Increase `adapt_delta` (→ 0.995); check `rho` prior vs. domain size |
+| Rhat > 1.01 for `rho` | Bimodal or flat posterior | Narrow `rho_prior_sd`; increase `n_locations` |
+| Very high nugget fraction | GP too smooth; or over-dispersed eDNA | Check `sigma_nugget_prior_mean`; try lower `log_lambda_mean` |
+| Slow sampling | Too many basis functions | Reduce `m_x`, `m_y`; check M < N_locations |
+| All-zero qPCR warning | Locations dropped from model | Expected; check that dropped locations are genuine non-detects |
+| Poor eDNA proportion fit | Misspecified dispersion priors | Adjust `beta0_prior_sd`, `gamma0_prior_mean` |
+
+**HSGP basis function rule of thumb**: `m_x × m_y` should be 10–20% of
+`N_locations` for reasonable approximation.  Error if `m_x * m_y >= N_locations`.
+
+---
+
+## Session Info
+
+```{r session-info}
+sessionInfo()
+```
