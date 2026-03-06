@@ -238,19 +238,22 @@ res <- fit_and_plot_v22(
 ```{r run-workflow, eval=FALSE}
 # Equivalent to steps 2–5 in a single call:
 res <- run_workflow_v22(
-  n_locations  = 50,
+  n_locations  = 60,
   n_species    = 4,
   rho_km       = 80,
+  stan_file = "quant_metabar_qpcr_v22.stan",
   chains       = 3,
-  iter         = 2000,
-  warmup       = 1000,
+  iter         = 1000,
+  warmup       = 500,
+  m_x = 5,
+  m_y = 6,
   rho_prior_mean = 100,
   rho_prior_sd   = 200,
-  sigma_nugget_true        = 0.25,
-  sigma_nugget_prior_mean  = log(0.25),
-  sigma_nugget_prior_sd    = 1e-5,
-  log_lambda_mean = log(4),
-  seed = 7
+  sigma_nugget_true        = 0.05,
+  sigma_nugget_prior_mean  = log(0.1),
+  sigma_nugget_prior_sd    = 1e-3,
+  log_lambda_mean = log(30),
+  seed = 73
 )
 ```
 
