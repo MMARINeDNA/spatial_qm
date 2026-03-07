@@ -81,8 +81,8 @@ sim <- simulate_qpcr_metabar_data_v22(
   n_qpcr_per_location           = 3,
   rho_km                        = 80,          # isotropic GP length scale (km)
   gp_alpha_true                 = c(1.2, 0.8, 1.5, 1.0),
-  sigma_nugget_true             = 0.25,        # per-location noise (all species)
-  log_lambda_mean               = log(4),      # mean log-copies/aliquot
+  sigma_nugget_true             = 0.1,        # per-location noise (all species)
+  log_lambda_mean               = log(20),      # mean log-copies/aliquot
   sigma_qpcr_true               = 0.3,         # qPCR measurement SD (log scale)
   qpcr_detection_intercept_true = -2.0,
   qpcr_detection_slope_true     = 1.5,
@@ -194,8 +194,8 @@ sdat <- make_stan_data_v22(
   rho_prior_sd            = 200,      # broad SD lets data identify rho
   gp_alpha_prior_mean     = 1.0,      # log-normal mean on log scale
   gp_alpha_prior_sd       = 0.5,
-  sigma_nugget_prior_mean = log(0.25), # pins hierarchical nugget near 0.25
-  sigma_nugget_prior_sd   = 1e-5,     # near-zero SD = fixed nugget (diagnostic mode)
+  sigma_nugget_prior_mean = log(0.1), # pins hierarchical nugget near 0.25
+  sigma_nugget_prior_sd   = 1e-3,     # near-zero SD = fixed nugget (diagnostic mode)
   sigma_qpcr_prior_sd     = 1.0,
   beta0_prior_sd          = 1.0,
   gamma0_prior_mean       = 2.0,
