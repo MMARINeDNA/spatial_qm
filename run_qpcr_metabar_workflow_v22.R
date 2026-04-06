@@ -1505,6 +1505,8 @@ fit_and_plot_v22 <- function(
   gp_alpha_posterior_plot <- plot_gp_alpha_posteriors(fit, formatted_data, true_gpalph)
 
   if (save_outputs) {
+    saveRDS(fit, file.path(output_dir, "fit_v22.rds"))
+    cat(sprintf("Stan fit saved to: %s\n", file.path(output_dir, "fit_v22.rds")))
     ggplot2::ggsave(file.path(output_dir, "concentration_heatmaps_v22.png"), combined_heatmaps,
                     width = 12, height = 10, dpi = 150)
     ggplot2::ggsave(file.path(output_dir, "qpcr_fit_v22.png"),              qpcr_plot,

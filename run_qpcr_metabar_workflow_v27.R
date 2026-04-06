@@ -84,7 +84,33 @@ cluster_coordinates <- function(coords, tolerance = 0.001) {
   coords
 }
 
-interpolate_surface <- function(x, y, z, resolution = 100, log_transform = TRUE) {
+# NA-aware separable Gaussian blur for interpolated grids.
+# Operates on a matrix; NAs are excluded from the kernel sum (border/hole safe).
+smooth_grid_gaussian <- function(mat, sigma = 2) {
+  r  <- max(1L, round(3 * sigma))
+  ks <- seq(-r, r)
+  w  <- dnorm(ks, sd = sigma); w <- w / sum(w)
+
+  blur_1d <- function(v) {
+    n      <- length(v)
+    padded <- c(rep(NA_real_, r), v, rep(NA_real_, r))
+    num    <- rep(0, n); wt <- rep(0, n)
+    for (k in seq_along(w)) {
+      vals        <- padded[k:(k + n - 1)]
+      ok          <- !is.na(vals)
+      num[ok]     <- num[ok] + w[k] * vals[ok]
+      wt[ok]      <- wt[ok]  + w[k]
+    }
+    ifelse(wt > 0, num / wt, NA_real_)
+  }
+
+  # Row-wise then column-wise (separable)
+  row_sm <- t(apply(mat, 1, blur_1d))
+  apply(row_sm, 2, blur_1d) |> matrix(nrow = nrow(mat))
+}
+
+interpolate_surface <- function(x, y, z, resolution = 100, log_transform = TRUE,
+                                smooth_sigma = 2) {
   x_range  <- range(x, na.rm = TRUE)
   y_range  <- range(y, na.rm = TRUE)
   x_expand <- diff(x_range) * 0.05
@@ -100,7 +126,10 @@ interpolate_surface <- function(x, y, z, resolution = 100, log_transform = TRUE)
   }
   interp_result <- akima::interp(x = x, y = y, z = z_interp,
                                   xo = x_grid, yo = y_grid,
-                                  linear = TRUE, extrap = FALSE, remove = FALSE)
+                                  linear = TRUE, extrap = FALSE, remove = FALSE,
+                                  duplicate = "mean")
+  if (!is.null(smooth_sigma) && smooth_sigma > 0)
+    interp_result$z <- smooth_grid_gaussian(interp_result$z, sigma = smooth_sigma)
   interp_df <- expand.grid(x = interp_result$x, y = interp_result$y) %>%
     mutate(value = as.vector(interp_result$z))
   if (back_transform) interp_df <- interp_df %>% mutate(value = exp(value))
@@ -214,54 +243,52 @@ format_qpcr_metabar_data_v19 <- function(
     reference_species = 1,
     species_names     = NULL,
     pcr_id_col        = "pcr_replicate_id",
+    location_id_col   = "location_id",
     lon_col           = "lon",
     lat_col           = "lat",
     species_col       = "species",
     reads_col         = "Nreads",
     qpcr_detected_col = "detected",
-    qpcr_log_conc_col = "qpcr_log_conc",
-    coord_tolerance   = 0.001
+    qpcr_log_conc_col = "qpcr_log_conc"
 ) {
   edna_work <- edna_data %>%
     rename(pcr_replicate_id = !!sym(pcr_id_col),
+           location_id      = !!sym(location_id_col),
            lon = !!sym(lon_col), lat = !!sym(lat_col),
            species = !!sym(species_col), Nreads = !!sym(reads_col))
   qpcr_work_raw <- qpcr_data %>%
-    rename(lon = !!sym(lon_col), lat = !!sym(lat_col),
-           detected = !!sym(qpcr_detected_col), qpcr_log_conc = !!sym(qpcr_log_conc_col))
+    rename(location_id   = !!sym(location_id_col),
+           lon = !!sym(lon_col), lat = !!sym(lat_col),
+           detected      = !!sym(qpcr_detected_col),
+           qpcr_log_conc = !!sym(qpcr_log_conc_col))
 
   # Exclude locations where all qPCR reps are non-detects
   zero_locs_qpcr <- qpcr_work_raw %>%
-    group_by(lon, lat) %>%
+    group_by(location_id) %>%
     summarise(any_detected = any(detected == 1), .groups = "drop") %>%
-    filter(!any_detected)
+    filter(!any_detected) %>%
+    pull(location_id)
 
-  if (nrow(zero_locs_qpcr) > 0) {
-    cat(sprintf("Excluding %d location(s) with all-zero qPCR detection.\n", nrow(zero_locs_qpcr)))
-    for (i in seq_len(nrow(zero_locs_qpcr))) {
-      qpcr_work_raw <- qpcr_work_raw %>%
-        filter(!(abs(lon - zero_locs_qpcr$lon[i]) < coord_tolerance &
-                   abs(lat - zero_locs_qpcr$lat[i]) < coord_tolerance))
-      edna_work <- edna_work %>%
-        filter(!(abs(lon - zero_locs_qpcr$lon[i]) < coord_tolerance &
-                   abs(lat - zero_locs_qpcr$lat[i]) < coord_tolerance))
-    }
+  if (length(zero_locs_qpcr) > 0) {
+    cat(sprintf("Excluding %d location(s) with all-zero qPCR detection: %s\n",
+                length(zero_locs_qpcr), paste(as.character(zero_locs_qpcr), collapse = ", ")))
+    edna_work     <- edna_work     %>% filter(!location_id %in% zero_locs_qpcr)
+    qpcr_work_raw <- qpcr_work_raw %>% filter(!location_id %in% zero_locs_qpcr)
   } else {
     cat("No all-zero qPCR locations to exclude.\n")
   }
 
-  pcr_coords  <- edna_work %>%
-    group_by(pcr_replicate_id) %>%
-    summarise(lon = first(lon), lat = first(lat), .groups = "drop")
-  qpcr_coords <- qpcr_work_raw %>% dplyr::select(lon, lat) %>% distinct()
-  all_coords  <- bind_rows(pcr_coords %>% dplyr::select(lon, lat), qpcr_coords) %>% distinct()
-  all_coords  <- cluster_coordinates(all_coords, tolerance = coord_tolerance)
+  # Build location list from unique location_ids; mean lat/lon per location_id
+  location_coords <- bind_rows(
+    edna_work     %>% distinct(location_id, lon, lat),
+    qpcr_work_raw %>% distinct(location_id, lon, lat)
+  ) %>%
+    group_by(location_id) %>%
+    summarise(lon = mean(lon), lat = mean(lat), .groups = "drop")
 
-  location_list <- all_coords %>%
-    group_by(cluster_id) %>%
-    summarise(lon = mean(lon), lat = mean(lat), .groups = "drop") %>%
-    mutate(location_idx = row_number()) %>%
-    dplyr::select(location_idx, lon, lat)
+  location_list <- location_coords %>%
+    arrange(location_id) %>%
+    mutate(location_idx = row_number())
   N_locations <- nrow(location_list)
 
   utm_coords <- convert_to_utm(location_list$lon, location_list$lat)
@@ -285,15 +312,15 @@ format_qpcr_metabar_data_v19 <- function(
     stop(sprintf("alpha_known length (%d) must match N_species (%d)",
                  length(alpha_known), N_species))
 
-  pcr_coords <- pcr_coords %>%
-    rowwise() %>%
-    mutate(location_idx = {
-      dists <- sqrt((location_list$lon - lon)^2 + (location_list$lat - lat)^2)
-      location_list$location_idx[which.min(dists)]
-    }) %>%
-    ungroup()
+  # Assign location_idx to PCR replicates via location_id join (no distance arithmetic)
+  loc_idx_map <- location_list %>% dplyr::select(location_id, location_idx)
 
-  edna_obs   <- pcr_coords %>% mutate(edna_obs_idx = row_number())
+  edna_obs <- edna_work %>%
+    group_by(pcr_replicate_id) %>%
+    summarise(location_id = first(location_id), .groups = "drop") %>%
+    left_join(loc_idx_map, by = "location_id") %>%
+    mutate(edna_obs_idx = row_number())
+
   N_edna_obs <- nrow(edna_obs)
 
   edna_work <- edna_work %>%
@@ -313,13 +340,9 @@ format_qpcr_metabar_data_v19 <- function(
   has_edna                        <- rep(0L, N_locations)
   has_edna[unique(edna_obs$location_idx)] <- 1L
 
+  # Assign location_idx to qPCR replicates via location_id join
   qpcr_work <- qpcr_work_raw %>%
-    rowwise() %>%
-    mutate(location_idx = {
-      dists <- sqrt((location_list$lon - lon)^2 + (location_list$lat - lat)^2)
-      location_list$location_idx[which.min(dists)]
-    }) %>%
-    ungroup()
+    left_join(loc_idx_map, by = "location_id")
   N_qpcr_reps       <- nrow(qpcr_work)
   qpcr_rep_location <- as.integer(qpcr_work$location_idx)
   qpcr_rep_detected <- as.integer(qpcr_work$detected)
@@ -1533,10 +1556,12 @@ fit_and_plot_v27 <- function(
                                        color = "white", size = 2.5, shape = 21, stroke = 0.5) +
             ggplot2::scale_fill_viridis_c(option = "plasma", name = "Conc.\nDots=true", trans = "log10")
         } else {
-          p_base + ggplot2::geom_point(data = sp_data,
-                                       ggplot2::aes(x = x_utm, y = y_utm, fill = mean),
-                                       color = "white", size = 2.5, shape = 21, stroke = 0.5) +
-            ggplot2::scale_fill_viridis_c(option = "plasma", name = "Conc.", trans = "log10")
+          p_base +
+            ggplot2::scale_fill_viridis_c(option = "plasma", name = "Conc.", trans = "log10") +
+            ggplot2::geom_point(data = sp_data,
+                                ggplot2::aes(x = x_utm, y = y_utm),
+                                color = "white", fill = "gray30", size = 2.0,
+                                shape = 21, stroke = 0.5)
         }
       }, error = function(e) { warning(paste("Heatmap failed for", sp, ":", e$message)); NULL })
       if (!is.null(p)) plots[[sp]] <- p
