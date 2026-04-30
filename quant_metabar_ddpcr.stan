@@ -124,7 +124,7 @@ transformed parameters {
     for (loc in 1:N_locations) {
       for (sp in 1:N_species) {
         lambda[loc, sp]   = exp(log_concentration[loc, sp]);
-        log_lambda_K[loc, sp] = log_concentration[loc, sp] - log1m_exp(-log_concentration[loc, sp]);
+        log_lambda_K[loc, sp] = log_concentration[loc, sp] - log1m_exp(-lambda[loc, sp]);
       }
       log_total_lambda[loc] = log_sum_exp(log_concentration[loc, ]);
       for (sp in 1:N_species)
