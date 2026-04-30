@@ -1,0 +1,6 @@
+CC = /usr/bin/clang
+CXX = /usr/bin/clang++
+CXX14 = /usr/bin/clang++
+CXX17 = /usr/bin/clang++
+CXX14FLAGS = -O3 -mtune=native -arch arm64 -ftemplate-depth-256
+CXX17FLAGS = -O3 -mtune=native -arch arm64 -ftemplate-depth-256

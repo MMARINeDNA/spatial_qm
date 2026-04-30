@@ -1,0 +1,18 @@
+FilterBioRep,FilterID,ddPCR_target,replicate,Positives,Accepted Droplets,Negatives,Conc(copies/µL),pct_positive,Well,Sample description 1,Target,Status,Experiment,SampleType,TargetType,Supermix,DyeName(s),accepted_per_uL,positives_per_uL
+F022_1,F022,Engraulis mordax,1,1,16801,16800,0.0748704820871353,0.0059520266650794,B07,Em_Ss_Duplex,Em_FAM,Manual,DQ,Unknown,Unknown,ddPCR Supermix for Probes (No dUTP),FAM,8400.5,0.5
+F022_1,F022,Engraulis mordax,2,1,16595,16594,0.0757999122142792,0.0060259114191021,B09,Em_Ss_Duplex,Em_FAM,Manual,DQ,Unknown,Unknown,ddPCR Supermix for Probes (No dUTP),FAM,8297.5,0.5
+F022_1,F022,Engraulis mordax,3,2,16196,16194,0.155339494347572,0.0123487280810077,B11,Em_Ss_Duplex,Em_FAM,Manual,DQ,Unknown,Unknown,ddPCR Supermix for Probes (No dUTP),FAM,8098.0,1.0
+F031_1,F031_1,Engraulis mordax,1,209,17000,16791,15.5601444244385,1.22941176470588,E07,Em_Ss_Duplex,Em_FAM,Manual,DQ,Unknown,Unknown,ddPCR Supermix for Probes (No dUTP),FAM,8500.0,104.5
+F031_1,F031_1,Engraulis mordax,3,125,14535,14410,10.8643064498901,0.85999312005504,E11,Em_Ss_Duplex,Em_FAM,Manual,DQ,Unknown,Unknown,ddPCR Supermix for Probes (No dUTP),FAM,7267.5,62.5
+F047_2,F047_2,Engraulis mordax,1,88,17036,16948,6.51436424255371,0.516553181498004,G07,Em_Ss_Duplex,Em_FAM,Manual,DQ,Unknown,Unknown,ddPCR Supermix for Probes (No dUTP),FAM,8518.0,44.0
+F047_2,F047_2,Engraulis mordax,2,65,17212,17147,4.7592248916626,0.377643504531722,G09,Em_Ss_Duplex,Em_FAM,Manual,DQ,Unknown,Unknown,ddPCR Supermix for Probes (No dUTP),FAM,8606.0,32.5
+F047_2,F047_2,Engraulis mordax,3,62,16897,16835,4.623948097229,0.366929040658105,G11,Em_Ss_Duplex,Em_FAM,Manual,DQ,Unknown,Unknown,ddPCR Supermix for Probes (No dUTP),FAM,8448.5,31.0
+F065_2,F065_2,Engraulis mordax,1,0,16316,16316,0,0.0,H07,Em_Ss_Duplex,Em_FAM,Manual,DQ,Unknown,Unknown,ddPCR Supermix for Probes (No dUTP),FAM,8158.0,0.0
+F065_2,F065_2,Engraulis mordax,2,0,16090,16090,0,0.0,H09,Em_Ss_Duplex,Em_FAM,Manual,DQ,Unknown,Unknown,ddPCR Supermix for Probes (No dUTP),FAM,8045.0,0.0
+F065_2,F065_2,Engraulis mordax,3,1,16113,16112,0.0780674368143082,0.0062061689319183,H11,Em_Ss_Duplex,Em_FAM,Manual,DQ,Unknown,Unknown,ddPCR Supermix for Probes (No dUTP),FAM,8056.5,0.5
+F074_1,F074,Engraulis mordax,1,66,16076,16010,5.17477893829346,0.410549888031849,A08,Em_Ss_Duplex,Em_FAM,Manual,DQ,Unknown,Unknown,ddPCR Supermix for Probes (No dUTP),FAM,8038.0,33.0
+F074_1,F074,Engraulis mordax,2,71,15279,15208,5.85878133773804,0.464690097519471,A10,Em_Ss_Duplex,Em_FAM,Manual,DQ,Unknown,Unknown,ddPCR Supermix for Probes (No dUTP),FAM,7639.5,35.5
+F074_1,F074,Engraulis mordax,3,63,14519,14456,5.46991586685181,0.433914181417453,A12,Em_Ss_Duplex,Em_FAM,Manual,DQ,Unknown,Unknown,ddPCR Supermix for Probes (No dUTP),FAM,7259.5,31.5
+F095_1,F095,Engraulis mordax,1,43,16998,16955,3.18605589866638,0.252970937757383,B08,Em_Ss_Duplex,Em_FAM,Manual,DQ,Unknown,Unknown,ddPCR Supermix for Probes (No dUTP),FAM,8499.0,21.5
+F095_1,F095,Engraulis mordax,2,44,17843,17799,3.10565853118896,0.246595303480356,B10,Em_Ss_Duplex,Em_FAM,Manual,DQ,Unknown,Unknown,ddPCR Supermix for Probes (No dUTP),FAM,8921.5,22.0
+F095_1,F095,Engraulis mordax,3,35,14724,14689,2.99358630180359,0.237707144797609,B12,Em_Ss_Duplex,Em_FAM,Manual,DQ,Unknown,Unknown,ddPCR Supermix for Probes (No dUTP),FAM,7362.0,17.5

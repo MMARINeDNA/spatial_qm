@@ -31,6 +31,12 @@ library(patchwork)
 
 
 # =============================================================================
+# SECTION 1: IMPORT RAW DATA
+# =============================================================================
+eDNA_data<-read.csv("Mod2_data/RL2501_3cetacean_3fish_combined_otu.csv")
+
+
+# =============================================================================
 # SECTION 1: FORMAT RAW DATA
 # =============================================================================
 
@@ -276,7 +282,7 @@ make_stan_data_metabar_only <- function(
 #'
 fit_metabar_only <- function(
     formatted_data,
-    stan_file     = "code/qPCR_mb/quant_metabar_only.stan",
+    stan_file     = "quant_metabar_only.stan",
     stan_data     = NULL,
     chains        = 3,
     iter          = 2000,
@@ -681,3 +687,4 @@ fit_and_plot_metabar_only <- function(
     )
   )
 }
+
